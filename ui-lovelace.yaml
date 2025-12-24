@@ -1,0 +1,239 @@
+title: Квартира в Екб
+views:
+- title: Сервер HA
+  id: server
+  icon: mdi:raspberry-pi
+  cards:
+    - type: entities
+      show_header_toggle: false     
+      entities:
+      - entity: input_boolean.notify_door
+      - entity: input_boolean.away_home
+      - entity: input_boolean.coridor_motion
+      - entity: input_boolean.notify_count
+      title: Управление квартирой
+      
+    - type: entities
+      show_header_toggle: false     
+      entities:
+      - entity: sensor.processor_temperature
+        name: Температура CPU
+        icon: 'mdi:temperature-celsius'
+      - entity: sensor.processor_use
+        name: Загрузка CPU
+      - entity: sensor.memory_use_percent
+        name: Загрузка RAM
+      - entity: sensor.disk_use_percent
+        name: Заполненность HDD
+      - entity: binary_sensor.rpi_power_status
+        name: Статус питания
+      - entity: sensor.last_boot
+        name: Последняя перезагрузка
+      - entity: sensor.date
+        name: Дата
+      - entity: sensor.time
+        name: Время
+      title: Сервер в Екатеринбурге
+
+    - type: entities
+      entities:
+      - entity: binary_sensor.videoreg_ping
+        name: Видеосервер
+      - entity: binary_sensor.zigstar_ping
+        name: Роутер ZigBee
+      - entity: binary_sensor.192_168_31_185
+        name: Часы Awtrix
+      - entity: binary_sensor.yandex_station
+        name: Колонка Yandex
+      title: Устройства в сети
+      
+    - type: entities
+      entities:
+      - entity: device_tracker.alex
+        name: Телефон хозяина
+      - entity: device_tracker.tanya
+        name: Телефон хозяйки
+      - entity: group.family  
+        name: Присутствие хозяев
+        card: glance
+      title: Люди  
+      
+    - type: entities
+      entities:
+      - entity: sensor.local_ip
+        name: IP-адрес
+      - entity: sensor.speedtest_download
+        name: Download
+      - entity: sensor.speedtest_ping
+        name: Ping
+        icon: mdi:call-missed
+      - entity: sensor.speedtest_upload
+        name: Upload
+      title: Интернет
+      
+- title: Квартира
+  id: main
+  icon: mdi:floor-plan
+  cards:
+ 
+    - type: entities
+      show_header_toggle: false
+      entities:
+      - entity: switch.air_vent_relay
+        name: Вентилятор в ванной
+        icon: mdi:turbine
+      - entity: switch.boiler_plug
+        name: Водонагреватель в ванной
+        icon: mdi:water-boiler
+      - entity: sensor.boiler_plug_current
+        name: Ток
+      - entity: sensor.boiler_plug_power
+        name: Мощность
+      - entity: switch.warm_floor_relay
+        name: Теплый пол
+        icon: mdi:heat-wave
+      - entity: switch.kran_kholodnoi_vody_v_vannoi_switch_1
+        name: Кран воды в ванной
+        icon: mdi:water-pump     
+      - entity: binary_sensor.bath_leak_sensor_water_leak
+        name: Протечка в ванной
+      - entity: sensor.bath_sensor_humidity
+        name: Влажность
+      - entity: sensor.bath_sensor_temperature
+        name: Температура
+      title: Ванная
+
+    - type: entities
+      show_header_toggle: false     
+      entities:
+      - entity: light.light_bedroom
+        name: Основной свет
+      - entity: light.light_bedroom_ambilight
+        name: Ночная подсветка        
+      - entity: light.bedroom_light
+        name: Светильник кровати
+        icon: mdi:bed-king-outline
+      - entity: climate.bedroom_battery
+        name: Термостат батареи
+      - entity: binary_sensor.bedroom_battery_battery_low
+        name: Батарейки термостата
+      - entity: binary_sensor.bedroom_leak_sensor_water_leak
+        name: Протечка батареи спальни
+      - entity: sensor.bedroom_sensor_humidity
+        name: Влажность
+      - entity: sensor.bedroom_sensor_temperature
+        name: Температура        
+      title: Спальня
+
+    - type: entities
+      show_header_toggle: false     
+      entities:
+      - entity: binary_sensor.door_sensor_contact
+        name: Входная дверь
+        icon: 'mdi:door'
+      - entity: light.light_koridor
+        name: Люстра в прихожей    
+      - entity: switch.door_light_plug
+        name: Контурная подсветка двери
+      - entity: sensor.motion_sensor_illuminance_2
+        name: Освещенность в прихожей
+      - entity: binary_sensor.motion_sensor_occupancy
+        name: Движение в прихожей
+      title: Прихожая
+      
+    - type: entities
+      show_header_toggle: false     
+      entities:
+      - entity: binary_sensor.kitchen_leak_sensor_water_leak
+        name: Протечка под раковиной в кухне
+      - entity: switch.kitchen_tap_plug
+        name: Перекрытие воды в кухне
+        icon: mdi:water-pump-off        
+      - entity: switch.sink_light_plug
+        name: Свет у раковины       
+        icon: mdi:faucet-variant
+      - entity: sensor.kitchen_sensor_humidity
+        name: Влажность
+      - entity: sensor.kitchen_sensor_temperature
+        name: Температура
+      title: Кухня-гостиная
+      
+- title: Погода
+  id: main
+  icon: mdi:weather-partly-cloudy
+  cards:
+ 
+    - type: weather-forecast
+      entity: weather.forecast_flat
+      show_forecast: true
+      name: Екатеринбург
+      
+    - type: entities
+      show_header_toggle: false     
+      entities:
+      - entity: sensor.next_sunrise
+        name: Следующий рассвет
+        icon: mdi:weather-sunset-up  
+      - entity: sensor.next_sunset
+        name: Следующий закат
+        icon: mdi:weather-sunset-down   
+      title: Солнце        
+      
+    - type: history-graph
+      title: "Атмосферное давление за последние 96 часов"
+      hours_to_show: 96
+      entities:
+      - sensor.bath_sensor_pressure
+      - entity: sensor.bath_sensor_pressure
+        name: Ванная
+      - sensor.balkon_sensor_pressure
+      - entity: sensor.balkon_sensor_pressure
+        name: Балкон
+        
+    - type: history-graph
+      title: "Температура в квартире за последние 96 часов"
+      hours_to_show: 96
+      entities:
+      - sensor.bath_sensor_temperature
+      - entity: sensor.bath_sensor_temperature
+        name: Ванная
+      - sensor.bedroom_sensor_temperature
+      - entity: sensor.bedroom_sensor_temperature
+        name: Спальня 
+      - sensor.kitchen_sensor_temperature
+      - entity: sensor.kitchen_sensor_temperature
+        name: Кухня 
+      
+    - type: history-graph
+      title: "Влажность в квартире за последние 96 часов"
+      hours_to_show: 96
+      entities:
+      - sensor.bath_sensor_humidity
+      - entity: sensor.bath_sensor_humidity
+        name: Ванная
+      - sensor.bedroom_sensor_humidity
+      - entity: sensor.bedroom_sensor_humidity
+        name: Спальня 
+      - sensor.kitchen_sensor_humidity
+      - entity: sensor.kitchen_sensor_humidity
+        name: Кухня 
+        
+    - type: history-graph
+      title: "Температура на балконе за последние 96 часов"
+      hours_to_show: 96
+      entities:
+      - sensor.balkon_sensor_temperature
+      - entity: sensor.balkon_sensor_temperature
+        name: Градусы Цельсия  
+
+- title: Термостат
+  id: server
+  icon: mdi:thermometer
+  cards:
+    - type: entities
+      title: Климат в спальне
+      entities:
+      - entity: climate.bedroom_battery
+        name: Батарея отопления
+      - entity: sensor.bedroom_sensor_temperature
+        name: Температура

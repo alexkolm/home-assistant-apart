@@ -1,0 +1,488 @@
+- id: meshtastic_api_to_telegram
+  alias: "[Meshtastic] Forward API Text Message to Telegram"
+  description: "Отправляет новое текстовое сообщение из Meshtastic API в Telegram"
+  trigger:
+    - platform: state
+      entity_id: sensor.meshtastic_api_text_message
+      attribute: message
+  action:
+    - variables:
+        msg_text: "{{ state_attr('sensor.meshtastic_api_text_message', 'message') }}"
+        msg_sender: "{{ state_attr('sensor.meshtastic_api_text_message', 'from') | default('Unknown') }}"
+    - service: notify.me
+      data:
+        message: |
+          📡 **Новое сообщение из Meshtastic**
+          От: {{ msg_sender }}
+          Текст: {{ msg_text }}
+  mode: single
+  
+- id: new_wifi_client
+  alias: "Уведомление о новом Wi-Fi клиенте"
+  description: "Присылает сообщение в Telegram при появлении неизвестного устройства в сети OpenWrt"
+  mode: single
+  trigger:
+  - platform: event
+    event_type: ubus.device_connected
+  condition:
+  - condition: template
+    value_template: >
+      {{ trigger.event.data.mac not in [
+        "b4:60:ed:2e:00:06",
+        "5c:e5:0c:cb:05:26",
+        "84:0d:8e:ad:69:0d",
+        "e8:db:84:1e:d6:8c",
+        "f6:f1:74:f3:8f:46",
+        "ba:0f:0e:e3:c9:d2",
+        "b8:87:6e:27:c2:36",
+        "90:de:80:8c:1c:5b",
+        "DC:A6:32:A2:6D:3F",
+        "B0:A7:32:06:C7:0B",
+        "00:12:41:BB:5F:31",
+        "b8:87:6e:27:c2:36",
+        "e8:db:84:1e:d6:8c",
+        "90:de:80:8c:1c:5b",
+        "bc:ff:4d:4e:36:cd"
+      ] }}
+  action:
+  - service: notify.me
+    data:
+      message: >
+        📶 В сети появился новый клиент!
+        MAC: {{ trigger.event.data.mac }}
+        Интерфейс: {{ trigger.event.data.interface }}
+        Сигнал: {{ trigger.event.data.signal | default("неизвестно") }}
+
+- id: bedroom_and_koridor_lamps_off
+  alias: "Контроль люстр — выключить после 5 часов работы"
+  trigger:
+    - platform: time_pattern
+      minutes: "/30"
+  condition: []
+  action:
+    - if:
+        - condition: state
+          entity_id: light.light_bedroom
+          state: "on"
+        - condition: template
+          value_template: >
+            {{ (now() - states.light.light_bedroom.last_changed).total_seconds() > 5 * 3600 }}
+      then:
+        - service: light.turn_off
+          target:
+            entity_id: light.light_bedroom
+        - service: notify.me
+          data:
+            message: |
+              ⚠️ Люстра в спальне горела более 5 часов.
+              Автоматически отключена.
+
+    - if:
+        - condition: state
+          entity_id: light.light_koridor
+          state: "on"
+        - condition: template
+          value_template: >
+            {{ (now() - states.light.light_koridor.last_changed).total_seconds() > 5 * 3600 }}
+      then:
+        - service: light.turn_off
+          target:
+            entity_id: light.light_koridor
+        - service: notify.me
+          data:
+            message: |
+              ⚠️ Люстра в коридоре горела более 5 часов.
+              Автоматически отключена.
+  mode: parallel
+  max: 3  # (опционально) ограничение на количество одновременных запусков
+
+
+- id: soil_moisture_check
+  alias: Влага почвы — напоминание при понижении
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.plant_sensor_soil_moisture
+      below: 100
+      for: "00:00:10"  # чтобы избежать ложных срабатываний
+    - platform: time
+      at: "10:00:00"  # ежедневное напоминание в 10 утра
+  condition:
+    - condition: numeric_state
+      entity_id: sensor.plant_sensor_soil_moisture
+      below: 100
+  action:
+    - service: notify.me
+      data:
+        message: | 
+          Проверьте влажность почвы у цветов в квартире
+           🌱 Влажность ниже 100%.
+           
+- id: sun_set
+  alias: Закат (использую для проверки, включен ли сервер)
+  trigger:
+  - platform: sun
+    event: sunset
+  action:
+  - service: notify.me
+    data:
+      message: 'ЕКБ: Солнце село 🌅'
+- id: zigbee_device_check
+  alias: Проверка Zigbee устройств на отвал за час до заката
+  trigger:
+    platform: sun
+    event: sunset
+    offset: "-01:00:00"
+
+  action:
+    - variables:
+        devices_offline: >
+          {% set result = [] %}
+          {% for entity in states.sensor %}
+            {% if 'z2m' in entity.entity_id %}
+              {% set last_seen = state_attr(entity.entity_id, 'last_seen') %}
+              {% if last_seen %}
+                {% set last_seen_dt = as_datetime(last_seen) %}
+                {% if last_seen_dt and (now() - last_seen_dt).total_seconds() > 86400 %}
+                  {% set result = result + [entity.name] %}
+                {% endif %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ result }}
+
+    - condition: template
+      value_template: "{{ devices_offline | count > 0 }}"
+
+    - service: notify.me
+      data:
+        message: >
+          🚨 Нет связи с Zigbee-устройствами:
+          {{ devices_offline | join(', ') }}
+
+- id: leaving_home
+  alias: Хозяин покинул дом
+  trigger:
+    platform: state
+    to: not_home
+    entity_id: device_tracker.alex
+  action:
+  - service: notify.me
+    data:
+      message: 'ЕКБ: Хозяин ушёл, уведомления об открытии двери включены'
+  - service: input_boolean.turn_on
+    target:
+      entity_id: input_boolean.notify_door
+- id: entering_home
+  alias: Хозяин вернулся в дом
+  trigger:
+    platform: state
+    to: home
+    entity_id: device_tracker.alex
+  action:
+  - service: notify.me
+    data:
+      message: 'ЕКБ: Хозяин пришёл, уведомления об открытии двери отключены'
+  - service: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.notify_door
+- id: faraway
+  alias: Включение режима, когда уезжаем из дома надолго
+  triggers:
+  - entity_id: sensor.coridor_switch4_action
+    to: 4_double
+    trigger: state
+  conditions:
+  - condition: state
+    entity_id: input_boolean.away_home
+    state: 'off'
+  actions:
+  - entity_id: input_boolean.away_home
+    action: input_boolean.turn_on
+  - target:
+      entity_id: !secret yandex_station_main
+    data:
+      media_content_id: Включаем режим уехали надолго
+      media_content_type: text
+      extra:
+        volume_level: 0.7
+    action: media_player.play_media
+  - target:
+      entity_id: climate.bedroom_battery
+    data:
+      temperature: 16
+    action: climate.set_temperature  
+    
+  - service: switch.turn_off
+    entity_id: switch.boiler_plug
+  - service: switch.turn_off
+    entity_id: switch.kran_kholodnoi_vody_v_vannoi_switch_1
+  mode: single
+- id: airvent_humi
+  alias: Запуск вентилятора ванной, когда влажность выше 50%
+  trigger:
+  - platform: mqtt
+    topic: zigbee2mqtt_1/bath_sensor
+  condition:
+  - condition: template
+    value_template: '{{ trigger.payload_json.humidity > 50 }}'
+  action:
+  - service: switch.turn_on
+    entity_id: switch.air_vent_relay
+  - delay: 00:05:00
+  - service: switch.turn_off
+    entity_id: switch.air_vent_relay
+- id: warm_floor_control
+  alias: Управление теплым полом утром и вечером
+  trigger:
+  - platform: time_pattern
+    minutes: "/5"
+    seconds: 0
+  - platform: time
+    at: 
+      - "10:00:00"
+      - "23:00:00"
+  condition:
+  - condition: state
+    entity_id: input_boolean.away_home
+    state: 'off'
+  - condition: or
+    conditions:
+      - condition: time
+        after: "08:00:00"
+        before: "10:00:00"
+      - condition: time
+        after: "21:00:00"
+        before: "23:00:00"
+  action:
+  - choose:
+      - conditions:
+          - condition: time
+            before: "10:00:00"
+          - condition: time
+            after: "08:00:00"
+        sequence:
+          - service: "switch.toggle"
+            entity_id: switch.warm_floor_relay
+      - conditions:
+          - condition: time
+            before: "23:00:00"
+          - condition: time
+            after: "21:00:00"
+        sequence:
+          - service: "switch.toggle"
+            entity_id: switch.warm_floor_relay
+    default:
+      - service: "switch.turn_off"
+        entity_id: switch.warm_floor_relay
+- id: sink_light
+  alias: Переключение света над раковиной кнопкой
+  trigger:
+  - platform: mqtt
+    topic: "zigbee2mqtt_1/sink_light_button/action"
+    payload: "single"
+  action:
+  - service: switch.toggle
+    entity_id: switch.sink_light_plug
+- id: toilet_vent
+  alias: Переключение вентилятора с кнопки в туалете
+  trigger:
+  - platform: mqtt
+    topic: "zigbee2mqtt_1/toilet_button/action"
+    payload: "single"
+  action:
+  - service: switch.toggle
+    entity_id: switch.air_vent_relay
+- id: coridor_light_1
+  alias: Переключение люстры в коридоре с выключателя
+  trigger:
+  - platform: mqtt
+    topic: "zigbee2mqtt_1/coridor_switch4/action"
+    payload: "1_single"
+  action:
+  - service: light.toggle
+    entity_id: light.light_koridor
+    data:
+      brightness_pct: 100
+- id: coridor_light_3
+  alias: Переключение подсветки двери в коридоре с выключателя
+  trigger:
+#  - platform: state
+#    entity_id: sensor.coridor_switch4_action
+#    to: 3_single
+  - platform: mqtt
+    topic: "zigbee2mqtt_1/coridor_switch4/action"
+    payload: "3_single"
+  action:
+  - service: switch.toggle
+    target:
+      entity_id:
+      - switch.door_light_plug
+- id: bedroom_light
+  alias: Переключение кроватного светильника
+  trigger:
+  - platform: mqtt
+    topic: "zigbee2mqtt_1/bedroom_switch/action"
+    payload: "single_right"
+  action:
+  - service: switch.toggle
+    data: {}
+    target:
+      entity_id:
+      - switch.bedroom_light
+- id: bedroom_light_2
+  alias: Переключение основного света в спальне
+  trigger:
+  - platform: mqtt
+    topic: "zigbee2mqtt_1/bedroom_switch/action"
+    payload: "single_left"
+  action:
+  - service: light.toggle
+    data:
+      brightness_pct: 100
+      color_name: darkgreen
+    target:
+      entity_id:
+      - light.light_bedroom_ambilight
+      - light.light_bedroom
+- id: bedroom_light_3
+  alias: Переключение ночного света в спальне
+  trigger:
+  - platform: mqtt
+    topic: "zigbee2mqtt_1/bedroom_switch/action"
+    payload: "double_right"
+  action:
+  - service: light.turn_off
+    entity_id: light.light_bedroom
+  - service: light.toggle
+    data:
+      brightness_pct: 100
+      color_name: darkblue
+    target:
+      entity_id: light.light_bedroom_ambilight
+- id: door_open
+  alias: Оповещение об открытии входной двери
+  trigger:
+  - platform: state
+    entity_id: binary_sensor.door_sensor_contact
+    from: 'on'
+    to: 'off'
+  condition:
+  - condition: state
+    entity_id: input_boolean.notify_door
+    state: 'on'
+  action:
+  - service: notify.me
+    data:
+      message: 'ЕКБ: Открытие двери'
+- id: water_leak_bathroom
+  alias: Протечка в ванной
+  triggers:
+  - entity_id:
+    - binary_sensor.bath_leak_sensor_water_leak
+    to: 'on'
+    trigger: state
+  action:
+  - service: notify.me
+    data:
+      message: 'ЕКБ: Протечка воды в ванной, перекрываем подачу воды'
+  - service: switch.turn_off
+    entity_id: switch.kran_kholodnoi_vody_v_vannoi_switch_1
+  - service: media_player.play_media
+    target:
+      entity_id: !secret yandex_station_main
+    data:
+      media_content_id: Внимание! Внимание! Протечка воды в туалете, перекрываем кран
+      media_content_type: text
+      extra:
+        volume_level: 0.9
+- id: water_leak_kitchen
+  alias: Протечка в кухне
+  triggers:
+  - entity_id:
+    - binary_sensor.kitchen_leak_sensor_water_leak
+    to: 'on'
+    trigger: state
+  action:
+  - service: notify.me
+    data:
+      message: 'ЕКБ: Протечка воды в кухне, перекрываем подачу воды'
+  - service: switch.turn_on
+    entity_id: switch.kitchen_tap_plug
+  - service: media_player.play_media
+    target:
+      entity_id: !secret yandex_station_main
+    data:
+      media_content_id: Внимание! Внимание! Протечка воды в кухне, перекрываем краны
+      media_content_type: text
+      extra:
+        volume_level: 0.9
+- id: water_leak_kitchen_battery
+  alias: Протечка батареи в столовой
+  triggers:
+  - entity_id:
+    - binary_sensor.kitchen_bat_leak_sensor_water_leak
+    to: 'on'
+    trigger: state
+  action:
+  - service: notify.me
+    data:
+      message: !secret security_battery_leak_message
+  - service: media_player.play_media
+    target:
+      entity_id: !secret yandex_station_main
+    data:
+      media_content_id: Внимание! Внимание! Протечка воды под батареей в столовой
+      media_content_type: text
+      extra:
+        volume_level: 0.9
+- id: water_leak_bedroom
+  alias: Протечка батареи в спальне
+  triggers:
+  - entity_id:
+    - binary_sensor.bedroom_leak_sensor_water_leak
+    to: 'on'
+    trigger: state
+  action:
+  - service: notify.me
+    data:
+      message: !secret security_battery_leak_message
+  - service: media_player.play_media
+    target:
+      entity_id: !secret yandex_station_main
+    data:
+      media_content_id: Внимание! Внимание! Протечка воды под батареей в спальне
+      media_content_type: text
+      extra:
+        volume_level: 0.9
+- id: light_on_koridor
+  alias: Включение света в коридоре по движению
+  trigger:
+  - platform: state
+    entity_id: binary_sensor.motion_sensor_occupancy
+    to: 'on'
+  condition:
+  - condition: and
+    conditions:
+    - condition: state
+      entity_id: input_boolean.coridor_motion
+      state: 'on'
+    - condition: numeric_state
+      entity_id: sensor.motion_sensor_illuminance_2
+      below: 8
+  action:
+  - service: switch.turn_on
+    target:
+      entity_id:
+      - switch.door_light_plug
+- id: light_off_koridor
+  alias: Выключение света в коридоре после движения
+  trigger:
+  - platform: state
+    entity_id: binary_sensor.motion_sensor_occupancy
+    to: 'off'
+  action:
+  - service: switch.turn_off
+    target:
+      entity_id:
+      - switch.door_light_plug
+

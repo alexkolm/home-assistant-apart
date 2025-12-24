@@ -1,0 +1,74 @@
+
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+input_boolean:
+  away_home:
+    name: Уехали надолго
+    icon: mdi:airplane-takeoff
+  coridor_motion:
+    name: Свет по движению в коридоре
+    icon: mdi:motion-sensor
+  notify_count:
+    name: Показания счетчиков переданы
+    icon: mdi:counter    
+  notify_door:
+    name: Уведомления от входной двери
+    icon: mdi:door
+    
+group:
+  family:
+    name: Owners
+    entities:
+      - device_tracker.alex
+      - device_tracker.tanya
+      
+# Text to speech
+tts:
+  - platform: google_translate
+
+notify:
+  - name: me
+    platform: telegram
+    chat_id: !secret telegram_chat_id
+
+lovelace:
+  mode: yaml
+
+mqtt:
+  sensor:
+    - name: "Motion Sensor Illuminance"
+      state_topic: "zigbee2mqtt_1/motion_sensor"
+      value_template: "{{ value_json.illuminance }}"
+      unit_of_measurement: "lx"
+      device_class: illuminance
+      # Дополнительные параметры для стабильной работы
+      expire_after: 7200  # Через 2 часа без данных станет unavailable
+      force_update: true
+      
+sensor:
+- platform: time_date
+  display_options:
+    - 'time'
+    - 'date'
+    - 'date_time'
+    
+template:
+  - sensor:
+      - name: "next_sunrise"
+        state: >
+          {{ as_timestamp(state_attr('sun.sun', 'next_rising')) | timestamp_custom('%H:%M') }}
+        unique_id: "next_sunrise"
+        
+      - name: "next_sunset"
+        state: >
+          {{ as_timestamp(state_attr('sun.sun', 'next_setting')) | timestamp_custom('%H:%M') }}
+        unique_id: "next_sunset"
+        
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
