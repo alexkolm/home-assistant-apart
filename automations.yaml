@@ -120,12 +120,16 @@
 - id: sun_set
   alias: Закат (использую для проверки, включен ли сервер)
   trigger:
-  - platform: sun
-    event: sunset
+    - platform: sun
+      event: sunset
   action:
-  - service: notify.me
-    data:
-      message: 'ЕКБ: Солнце село 🌅'
+    - service: notify.me
+      data:
+        message: |
+          ЕКБ: Солнце село 🌅
+          temp out {{ states('sensor.balkon_sensor_temperature') | float(0) | round(1) }}°C / in {{ states('sensor.kitchen_sensor_temperature') | float(0) | round(1) }}°C
+  mode: single
+
 - id: zigbee_device_check
   alias: Проверка Zigbee устройств на отвал за час до заката
   trigger:
@@ -306,9 +310,6 @@
 - id: coridor_light_3
   alias: Переключение подсветки двери в коридоре с выключателя
   trigger:
-#  - platform: state
-#    entity_id: sensor.coridor_switch4_action
-#    to: 3_single
   - platform: mqtt
     topic: "zigbee2mqtt_1/coridor_switch4/action"
     payload: "3_single"
