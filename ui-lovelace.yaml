@@ -41,8 +41,6 @@ views:
         name: Видеосервер
       - entity: binary_sensor.zigstar_ping
         name: Роутер ZigBee
-      - entity: binary_sensor.192_168_31_185
-        name: Часы Awtrix
       - entity: binary_sensor.yandex_station
         name: Колонка Yandex
       title: Устройства в сети
