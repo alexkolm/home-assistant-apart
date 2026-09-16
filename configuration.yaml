@@ -5,6 +5,28 @@ default_config:
 # Load frontend themes from the themes folder
 frontend:
   themes: !include_dir_merge_named themes
+  
+shell_command:
+  check_zigbee: 'python3 /config/check_zigbee.py'
+  
+command_line:
+  - sensor:
+      name: Zigbee Check
+      unique_id: zigbee_check
+      command: "cat /config/zigbee_check_status.json"
+      value_template: "{{ value_json.status }}"
+      json_attributes:
+        - state_age_seconds
+        - offline_count
+        - checked_at
+        - offline_devices
+      scan_interval: 3600
+      
+input_datetime:
+  zigbee_last_alert:
+    name: Zigbee Last Alert
+    has_date: true
+    has_time: true
 
 input_boolean:
   away_home:

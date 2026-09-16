@@ -1,3 +1,58 @@
+- id: zigbee_check_telegram
+  alias: "[Zigbee] Telegram Alert"
+  description: "Уведомление о проблемах Zigbee2MQTT не чаще одного раза в сутки"
+  trigger:
+    - platform: time_pattern
+      minutes: "0"
+
+  condition:
+    - condition: template
+      value_template: >
+        {{ states('sensor.zigbee_check') in ['offline', 'stale'] }}
+
+    - condition: template
+      value_template: >
+        {% set last = states('input_datetime.zigbee_last_alert') %}
+        {{ last in ['unknown', 'unavailable'] or
+           (as_timestamp(now()) - as_timestamp(last)) >= 86400 }}
+
+  action:
+    - service: notify.me
+      data:
+        message: >
+          {% if states('sensor.zigbee_check') == 'stale' %}
+          ⚠️ **Zigbee2MQTT: проблема с state.json**
+
+          Файл state.json не обновлялся более 1 часа.
+          Проверка устройств временно недостоверна.
+          {% else %}
+          ⚠️ **Zigbee2MQTT: устройства не отвечают**
+
+          {% for device in state_attr('sensor.zigbee_check', 'offline_devices') or [] %}
+          • {{ device.name }}
+            Последний ответ: {{ device.last_seen }}
+            Возраст: {{ (device.age_seconds / 86400) | round(1) }} суток
+          {% endfor %}
+          {% endif %}
+
+    - service: input_datetime.set_datetime
+      target:
+        entity_id: input_datetime.zigbee_last_alert
+      data:
+        datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+  mode: single
+
+- id: zigbee_check_hourly
+  alias: "[Zigbee] Check Zigbee2MQTT State"
+  description: "Ежечасно проверяет состояние state.json Zigbee2MQTT"
+  trigger:
+    - platform: time_pattern
+      minutes: "0"
+  action:
+    - service: shell_command.check_zigbee
+  mode: single
+
 - id: meshtastic_api_to_telegram
   alias: "[Meshtastic] Forward API Text Message to Telegram"
   description: "Отправляет новое текстовое сообщение из Meshtastic API в Telegram"
@@ -16,42 +71,6 @@
           От: {{ msg_sender }}
           Текст: {{ msg_text }}
   mode: single
-  
-- id: new_wifi_client
-  alias: "Уведомление о новом Wi-Fi клиенте"
-  description: "Присылает сообщение в Telegram при появлении неизвестного устройства в сети OpenWrt"
-  mode: single
-  trigger:
-  - platform: event
-    event_type: ubus.device_connected
-  condition:
-  - condition: template
-    value_template: >
-      {{ trigger.event.data.mac not in [
-        "b4:60:ed:2e:00:06",
-        "5c:e5:0c:cb:05:26",
-        "84:0d:8e:ad:69:0d",
-        "e8:db:84:1e:d6:8c",
-        "f6:f1:74:f3:8f:46",
-        "ba:0f:0e:e3:c9:d2",
-        "b8:87:6e:27:c2:36",
-        "90:de:80:8c:1c:5b",
-        "DC:A6:32:A2:6D:3F",
-        "B0:A7:32:06:C7:0B",
-        "00:12:41:BB:5F:31",
-        "b8:87:6e:27:c2:36",
-        "e8:db:84:1e:d6:8c",
-        "90:de:80:8c:1c:5b",
-        "bc:ff:4d:4e:36:cd"
-      ] }}
-  action:
-  - service: notify.me
-    data:
-      message: >
-        📶 В сети появился новый клиент!
-        MAC: {{ trigger.event.data.mac }}
-        Интерфейс: {{ trigger.event.data.interface }}
-        Сигнал: {{ trigger.event.data.signal | default("неизвестно") }}
 
 - id: bedroom_and_koridor_lamps_off
   alias: "Контроль люстр — выключить после 5 часов работы"
@@ -129,39 +148,6 @@
           ЕКБ: Солнце село 🌅
           temp out {{ states('sensor.balkon_sensor_temperature') | float(0) | round(1) }}°C / in {{ states('sensor.kitchen_sensor_temperature') | float(0) | round(1) }}°C
   mode: single
-
-- id: zigbee_device_check
-  alias: Проверка Zigbee устройств на отвал за час до заката
-  trigger:
-    platform: sun
-    event: sunset
-    offset: "-01:00:00"
-
-  action:
-    - variables:
-        devices_offline: >
-          {% set result = [] %}
-          {% for entity in states.sensor %}
-            {% if 'z2m' in entity.entity_id %}
-              {% set last_seen = state_attr(entity.entity_id, 'last_seen') %}
-              {% if last_seen %}
-                {% set last_seen_dt = as_datetime(last_seen) %}
-                {% if last_seen_dt and (now() - last_seen_dt).total_seconds() > 86400 %}
-                  {% set result = result + [entity.name] %}
-                {% endif %}
-              {% endif %}
-            {% endif %}
-          {% endfor %}
-          {{ result }}
-
-    - condition: template
-      value_template: "{{ devices_offline | count > 0 }}"
-
-    - service: notify.me
-      data:
-        message: >
-          🚨 Нет связи с Zigbee-устройствами:
-          {{ devices_offline | join(', ') }}
 
 - id: leaving_home
   alias: Хозяин покинул дом
