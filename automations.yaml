@@ -1,75 +1,39 @@
-- id: zigbee_check_telegram
-  alias: "[Zigbee] Telegram Alert"
-  description: "Уведомление о проблемах Zigbee2MQTT не чаще одного раза в сутки"
+- id: zigbee_telegram_daily
+  alias: "[Zigbee] Daily Telegram Alert"
+  description: "Ежедневная проверка состояния Zigbee2MQTT"
   trigger:
-    - platform: time_pattern
-      minutes: "0"
+    - platform: time
+      at: "10:00:00"
 
   condition:
     - condition: template
       value_template: >
-        {{ states('sensor.zigbee_check') in ['offline', 'stale'] }}
-
-    - condition: template
-      value_template: >
-        {% set last = states('input_datetime.zigbee_last_alert') %}
-        {{ last in ['unknown', 'unavailable'] or
-           (as_timestamp(now()) - as_timestamp(last)) >= 86400 }}
+        {{ states('sensor.zigbee_check') != 'ok' }}
 
   action:
     - service: notify.me
       data:
-        message: >
-          {% if states('sensor.zigbee_check') == 'stale' %}
-          ⚠️ **Zigbee2MQTT: проблема с state.json**
-
-          Файл state.json не обновлялся более 1 часа.
-          Проверка устройств временно недостоверна.
-          {% else %}
+        message: |
           ⚠️ **Zigbee2MQTT: устройства не отвечают**
 
-          {% for device in state_attr('sensor.zigbee_check', 'offline_devices') or [] %}
+          {% for device in state_attr('sensor.zigbee_check', 'offline_devices') %}
           • {{ device.name }}
             Последний ответ: {{ device.last_seen }}
             Возраст: {{ (device.age_seconds / 86400) | round(1) }} суток
           {% endfor %}
-          {% endif %}
-
-    - service: input_datetime.set_datetime
-      target:
-        entity_id: input_datetime.zigbee_last_alert
-      data:
-        datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
 
   mode: single
-
+  
 - id: zigbee_check_hourly
   alias: "[Zigbee] Check Zigbee2MQTT State"
   description: "Ежечасно проверяет состояние state.json Zigbee2MQTT"
   trigger:
     - platform: time_pattern
       minutes: "0"
+
   action:
     - service: shell_command.check_zigbee
-  mode: single
 
-- id: meshtastic_api_to_telegram
-  alias: "[Meshtastic] Forward API Text Message to Telegram"
-  description: "Отправляет новое текстовое сообщение из Meshtastic API в Telegram"
-  trigger:
-    - platform: state
-      entity_id: sensor.meshtastic_api_text_message
-      attribute: message
-  action:
-    - variables:
-        msg_text: "{{ state_attr('sensor.meshtastic_api_text_message', 'message') }}"
-        msg_sender: "{{ state_attr('sensor.meshtastic_api_text_message', 'from') | default('Unknown') }}"
-    - service: notify.me
-      data:
-        message: |
-          📡 **Новое сообщение из Meshtastic**
-          От: {{ msg_sender }}
-          Текст: {{ msg_text }}
   mode: single
 
 - id: bedroom_and_koridor_lamps_off

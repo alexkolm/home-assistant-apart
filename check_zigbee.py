@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime, timezone, timedelta
 
+
 STATE_FILE = "/config/zigbee2mqtt/state.json"
 CONFIG_FILE = "/config/zigbee2mqtt/configuration.yaml"
 STATUS_FILE = "/config/zigbee_check_status.json"
@@ -10,11 +11,8 @@ DEVICE_MAX_AGE = timedelta(hours=24)
 STATE_MAX_AGE = timedelta(hours=1)
 
 
-def save_status(
-    status,
-    state_age=None,
-    offline_devices=None
-):
+def save_status(status, state_age=None, offline_devices=None):
+
     if offline_devices is None:
         offline_devices = []
 
@@ -22,11 +20,12 @@ def save_status(
         "status": status,
         "state_age_seconds": (
             int(state_age.total_seconds())
-            if state_age is not None else None
+            if state_age is not None
+            else None
         ),
         "offline_count": len(offline_devices),
         "offline_devices": offline_devices,
-        "checked_at": datetime.now(timezone.utc).isoformat()
+        "checked_at": datetime.now(timezone.utc).isoformat(),
     }
 
     tmp_file = STATUS_FILE + ".tmp"
@@ -36,13 +35,14 @@ def save_status(
             data,
             f,
             ensure_ascii=False,
-            indent=2
+            indent=2,
         )
 
     os.replace(tmp_file, STATUS_FILE)
 
 
 def load_devices():
+
     devices = {}
 
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -51,14 +51,17 @@ def load_devices():
     current_ieee = None
 
     for line in lines:
+
         stripped = line.strip()
 
         if stripped.startswith("'0x") and stripped.endswith("':"):
             current_ieee = stripped[1:-2]
 
         elif current_ieee and stripped.startswith("friendly_name:"):
+
             devices[current_ieee] = stripped.split(
-                ":", 1
+                ":",
+                1
             )[1].strip()
 
             current_ieee = None
@@ -67,12 +70,16 @@ def load_devices():
 
 
 def check_state_file(now):
+
     try:
         mtime = os.path.getmtime(STATE_FILE)
+
     except OSError as e:
+
         print(
             f"STATE_ERROR | cannot access state.json: {e}"
         )
+
         return False, None
 
     modified = datetime.fromtimestamp(
@@ -83,27 +90,33 @@ def check_state_file(now):
     age = now - modified
 
     if age > STATE_MAX_AGE:
+
         return False, age
 
     return True, age
 
 
 def check_devices(state, devices, now):
+
     offline = []
 
     for ieee, name in devices.items():
 
         data = state.get(ieee, {})
+
         last_seen = data.get("last_seen")
 
         if not last_seen:
             continue
 
         try:
+
             dt = datetime.fromisoformat(
                 last_seen.replace("Z", "+00:00")
             )
+
         except ValueError:
+
             continue
 
         age = now - dt
@@ -126,7 +139,7 @@ def main():
 
     now = datetime.now(timezone.utc)
 
-    # 1. Проверяем state.json
+    # Проверяем свежесть state.json
 
     state_ok, state_age = check_state_file(now)
 
@@ -153,7 +166,7 @@ def main():
 
         return
 
-    # 2. Читаем state.json
+    # Читаем state.json
 
     try:
 
@@ -178,7 +191,7 @@ def main():
 
         return
 
-    # 3. Читаем устройства из configuration.yaml
+    # Читаем список устройств
 
     try:
 
@@ -198,7 +211,7 @@ def main():
 
         return
 
-    # 4. Проверяем устройства
+    # Проверяем устройства
 
     offline = check_devices(
         state,
