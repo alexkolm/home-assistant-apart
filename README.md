@@ -17,23 +17,23 @@
 
 ```mermaid
 flowchart LR
-    subgraph Devices[Устройства]
-        Z[Zigbee: датчики, выключатели,<br/>реле, термостат]
-        C[IP-камеры]
-        Y[Яндекс.Станция]
+    subgraph Devices["Устройства"]
+        Z["Zigbee: датчики, выключатели,<br/>реле, термостат"]
+        C["IP-камеры"]
+        Y["Яндекс.Станция"]
     end
 
-    Z --> Z2M[Zigbee2MQTT<br/>topic: zigbee2mqtt_1]
-    Z2M <--> MQTT[(MQTT)]
-    MQTT <--> HA[Home Assistant]
+    Z --> Z2M["Zigbee2MQTT<br/>topic: zigbee2mqtt_1"]
+    Z2M <--> MQTT[("MQTT")]
+    MQTT <--> HA["Home Assistant"]
     C --> HA
     HA --> Y
 
-    Z2M -. state.json .-> CHK[check_zigbee.py]
-    CHK --> S[sensor.zigbee_check]
+    Z2M -.->|"state.json"| CHK["check_zigbee.py"]
+    CHK --> S["sensor.zigbee_check"]
     S --> HA
 
-    HA --> TG[Telegram<br/>notify.me]
+    HA --> TG["Telegram<br/>notify.me"]
 ```
 
 - Устройства Zigbee работают через **Zigbee2MQTT** (префикс топиков `zigbee2mqtt_1`); часть автоматизаций слушает MQTT-топики напрямую (кнопки, датчики), часть — состояния сущностей HA.
