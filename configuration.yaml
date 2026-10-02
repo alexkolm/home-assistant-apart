@@ -5,30 +5,31 @@ default_config:
 # Load frontend themes from the themes folder
 frontend:
   themes: !include_dir_merge_named themes
-  
-shell_command:
-  check_zigbee: 'python3 /config/check_zigbee.py'
-  
+
 command_line:
   - sensor:
       name: Zigbee Check
       unique_id: zigbee_check
-      command: "cat /config/zigbee_check_status.json"
+      command: "python3 /config/check_zigbee.py"
+      command_timeout: 20          # скрипт при битом state.json делает до 3 попыток (~3 с)
+      scan_interval: 900           # 15 минут
       value_template: "{{ value_json.status }}"
       json_attributes:
-        - state_age_seconds
-        - offline_count
-        - checked_at
+        - problem_key              # стабильный «отпечаток» набора проблем — по нему триггерится автоматизация
+        - offline_names
         - offline_devices
-      scan_interval: 3600
-      
-input_datetime:
-  zigbee_last_alert:
-    name: Zigbee Last Alert
-    has_date: true
-    has_time: true
+        - offline_count
+        - checked
+        - mass_outage
+        - state_age_seconds
+        - message
+        - report                   # готовый HTML для Telegram
+        - checked_at
 
 input_boolean:
+  warm_floor_enabled:
+    name: Тёплый пол включён
+    icon: mdi:heating-coil
   away_home:
     name: Уехали надолго
     icon: mdi:airplane-takeoff
@@ -41,6 +42,24 @@ input_boolean:
   notify_door:
     name: Уведомления от входной двери
     icon: mdi:door
+
+input_number:
+  warm_floor_period_min:
+    name: Тёплый пол — период цикла, мин
+    icon: mdi:timer-cog-outline
+    min: 5
+    max: 60
+    step: 5
+    unit_of_measurement: min
+    mode: box
+  warm_floor_duty_pct:
+    name: Тёплый пол — загрузка, %
+    icon: mdi:percent-outline
+    min: 10
+    max: 100
+    step: 5
+    unit_of_measurement: "%"
+    mode: box
     
 group:
   family:
@@ -97,6 +116,36 @@ template:
         state: >
           {{ as_timestamp(state_attr('sun.sun', 'next_setting')) | timestamp_custom('%H:%M') }}
         unique_id: "next_sunset"
+  - binary_sensor:
+      - name: "Тёплый пол — нужен нагрев"
+        unique_id: warm_floor_demand
+        icon: mdi:radiator
+        # Чистая функция от времени и настроек: «должно ли реле быть включено сейчас».
+        # now() заставляет шаблон пересчитываться каждую минуту.
+        state: >-
+          {% set period = states('input_number.warm_floor_period_min') | int(20) %}
+          {% set duty = states('input_number.warm_floor_duty_pct') | float(50) %}
+          {% set phase = (now().hour * 60 + now().minute) % period %}
+          {{ is_state('input_boolean.warm_floor_enabled', 'on')
+             and is_state('input_boolean.away_home', 'off')
+             and is_state('schedule.warm_floor', 'on')
+             and phase < period * duty / 100 }}
+             
+schedule:
+  warm_floor:
+    name: Тёплый пол — окна нагрева
+    icon: mdi:calendar-clock
+    monday: &warm_floor_windows
+      - from: "08:00:00"
+        to: "10:00:00"
+      - from: "21:00:00"
+        to: "23:00:00"
+    tuesday: *warm_floor_windows
+    wednesday: *warm_floor_windows
+    thursday: *warm_floor_windows
+    friday: *warm_floor_windows
+    saturday: *warm_floor_windows
+    sunday: *warm_floor_windows  
         
 automation: !include automations.yaml
 script: !include scripts.yaml

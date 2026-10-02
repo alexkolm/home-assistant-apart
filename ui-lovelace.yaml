@@ -1,7 +1,7 @@
 title: Квартира в Екб
 views:
 - title: Сервер HA
-  id: server
+  path: server
   icon: mdi:raspberry-pi
   cards:
     - type: entities
@@ -70,7 +70,7 @@ views:
       title: Интернет
       
 - title: Квартира
-  id: main
+  path: apartment
   icon: mdi:floor-plan
   cards:
  
@@ -87,9 +87,6 @@ views:
         name: Ток
       - entity: sensor.boiler_plug_power
         name: Мощность
-      - entity: switch.warm_floor_relay
-        name: Теплый пол
-        icon: mdi:heat-wave
       - entity: switch.kran_kholodnoi_vody_v_vannoi_switch_1
         name: Кран воды в ванной
         icon: mdi:water-pump     
@@ -157,7 +154,7 @@ views:
       title: Кухня-гостиная
       
 - title: Погода
-  id: main
+  path: weather
   icon: mdi:weather-partly-cloudy
   cards:
  
@@ -277,9 +274,9 @@ views:
           tap_action:
             action: more-info
 
-- title: Термостат
-  id: server
-  icon: mdi:thermometer
+- title: Климат
+  path: thermostat
+  icon: mdi:home-thermometer
   cards:
     - type: entities
       title: Климат в спальне
@@ -288,3 +285,40 @@ views:
         name: Батарея отопления
       - entity: sensor.bedroom_sensor_temperature
         name: Температура
+    - type: entities
+    
+      title: Тёплый пол
+      show_header_toggle: false
+      state_color: true
+      entities:
+      - entity: input_boolean.warm_floor_enabled
+        name: Включён (сезонный выключатель)
+      - entity: switch.warm_floor_relay
+        name: Реле (управляется автоматикой)
+        icon: mdi:heat-wave
+      - entity: binary_sensor.warm_floor_demand
+        name: Фаза цикла
+        icon: mdi:radiator
+      - entity: schedule.warm_floor
+        name: Окно нагрева
+      - type: attribute
+        entity: schedule.warm_floor
+        attribute: next_event
+        name: Следующая смена окна
+        format: relative
+        icon: mdi:calendar-clock
+      - type: section
+        label: Настройки цикла
+      - entity: input_number.warm_floor_duty_pct
+        name: Загрузка, %
+      - entity: input_number.warm_floor_period_min
+        name: Период цикла, мин
+
+    - type: history-graph
+      title: Тёплый пол — реле и температура в ванной
+      hours_to_show: 24
+      entities:
+      - entity: switch.warm_floor_relay
+        name: Реле пола
+      - entity: sensor.bath_sensor_temperature
+        name: Температура в ванной
