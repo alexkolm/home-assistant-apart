@@ -12,7 +12,7 @@ command_line:
       unique_id: zigbee_check
       command: "python3 /config/check_zigbee.py"
       command_timeout: 20          # скрипт при битом state.json делает до 3 попыток (~3 с)
-      scan_interval: 900           # 15 минут
+      scan_interval: 300           # 5 минут: stale в 30 мин и розетки в 2 ч не ждут четверть часа
       value_template: "{{ value_json.status }}"
       json_attributes:
         - problem_key              # стабильный «отпечаток» набора проблем — по нему триггерится автоматизация
@@ -43,6 +43,15 @@ input_boolean:
     name: Уведомления от входной двери
     icon: mdi:door
 
+# message_id Telegram -> !id ноды. Polling отдаёт у ответа только номер цитаты,
+# без её текста, поэтому адрес хранится здесь. Последние пары, через запятую.
+input_text:
+  meshtastic_reply_routes:
+    name: Meshtastic — маршруты ответов Telegram
+    max: 255
+    initial: "927:!0badc0de,929:!acaab0d8"
+    mode: text
+
 input_number:
   warm_floor_period_min:
     name: Тёплый пол — период цикла, мин
@@ -72,10 +81,10 @@ group:
 tts:
   - platform: google_translate
 
-notify:
-  - name: me
-    platform: telegram
-    chat_id: !secret telegram_chat_id
+# Telegram: интеграция telegram_bot. Текст — notify.send_message,
+# HTML и прочие параметры бота — telegram_bot.send_message.
+# Цель — !secret telegram_notify_entity (групповой чат).
+# Платформа notify с platform: telegram удалена в HA 2026.11.
 
 lovelace:
   resource_mode: yaml
@@ -117,7 +126,10 @@ template:
           {{ as_timestamp(state_attr('sun.sun', 'next_setting')) | timestamp_custom('%H:%M') }}
         unique_id: "next_sunset"
   - binary_sensor:
-      - name: "Тёплый пол — нужен нагрев"
+      # entity_id задан явно: unique_id его не определяет, русское имя
+      # иначе становится binary_sensor.teplyi_pol_nuzhen_nagrev.
+      - default_entity_id: binary_sensor.warm_floor_demand
+        name: "Тёплый пол — нужен нагрев"
         unique_id: warm_floor_demand
         icon: mdi:radiator
         # Чистая функция от времени и настроек: «должно ли реле быть включено сейчас».

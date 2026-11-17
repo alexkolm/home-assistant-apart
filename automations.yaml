@@ -8,6 +8,8 @@
     Пишет в Telegram сразу, когда меняется набор проблемных устройств
     (новые / вернувшиеся), напоминает в 10:00, пока проблема не устранена,
     и сообщает, если сам сенсор мониторинга перестал работать.
+    Пока сенсор unavailable/unknown, дневное напоминание приходит только
+    если это длится больше часа — рестарт HA в 10:00 сам по себе молчит.
   mode: queued
   max: 5
   triggers:
@@ -29,9 +31,12 @@
     - condition: template
       alias: "Пропускаем рестарт HA и напоминания при status=ok"
       value_template: >-
+        {% set st = states('sensor.zigbee_check') %}
         {{ trigger.id == 'sensor_dead'
-           or (trigger.id == 'reminder'
-               and states('sensor.zigbee_check') not in ['ok', 'unknown', 'unavailable'])
+           or (trigger.id == 'reminder' and st not in ['ok', 'unknown', 'unavailable'])
+           or (trigger.id == 'reminder' and st in ['unknown', 'unavailable']
+               and states.sensor.zigbee_check is not none
+               and (now() - states.sensor.zigbee_check.last_changed).total_seconds() > 3600)
            or (trigger.id == 'changed'
                and trigger.from_state is not none
                and trigger.from_state.state not in ['unknown', 'unavailable']
@@ -43,13 +48,17 @@
         prev_names: >-
           {{ trigger.from_state.attributes.get('offline_names', [])
              if trigger.id == 'changed' else [] }}
-    - action: notify.me
+    - action: telegram_bot.send_message
       data:
+        entity_id: !secret telegram_notify_entity
         parse_mode: html
         message: |-
-          {%- if trigger.id == 'sensor_dead' -%}
+          {%- if trigger.id == 'sensor_dead' or (trigger.id == 'reminder' and status in ['unknown', 'unavailable']) -%}
           🚨 <b>Мониторинг Zigbee не работает</b>
-          Сенсор <code>sensor.zigbee_check</code> недоступен больше часа.
+          Сенсор <code>sensor.zigbee_check</code>
+          {%- if trigger.id == 'reminder' %} по-прежнему недоступен.
+          {%- else %} недоступен больше часа.
+          {%- endif %}
           Проверьте <code>/config/check_zigbee.py</code> и лог HA.
           {%- else -%}
           {%- set diff = status in ['ok', 'offline'] -%}
@@ -87,7 +96,9 @@
         - service: light.turn_off
           target:
             entity_id: light.light_bedroom
-        - service: notify.me
+        - service: notify.send_message
+          target:
+            entity_id: !secret telegram_notify_entity
           data:
             message: |
               ⚠️ Люстра в спальне горела более 5 часов.
@@ -104,7 +115,9 @@
         - service: light.turn_off
           target:
             entity_id: light.light_koridor
-        - service: notify.me
+        - service: notify.send_message
+          target:
+            entity_id: !secret telegram_notify_entity
           data:
             message: |
               ⚠️ Люстра в коридоре горела более 5 часов.
@@ -127,7 +140,9 @@
       entity_id: sensor.plant_sensor_soil_moisture
       below: 100
   action:
-    - service: notify.me
+    - service: notify.send_message
+      target:
+        entity_id: !secret telegram_notify_entity
       data:
         message: | 
           Проверьте влажность почвы у цветов в квартире
@@ -139,7 +154,9 @@
     - platform: sun
       event: sunset
   action:
-    - service: notify.me
+    - service: notify.send_message
+      target:
+        entity_id: !secret telegram_notify_entity
       data:
         message: |
           ЕКБ: Солнце село 🌅
@@ -153,7 +170,9 @@
     to: not_home
     entity_id: device_tracker.alex
   action:
-  - service: notify.me
+  - service: notify.send_message
+    target:
+      entity_id: !secret telegram_notify_entity
     data:
       message: 'ЕКБ: Хозяин ушёл, уведомления об открытии двери включены'
   - service: input_boolean.turn_on
@@ -166,7 +185,9 @@
     to: home
     entity_id: device_tracker.alex
   action:
-  - service: notify.me
+  - service: notify.send_message
+    target:
+      entity_id: !secret telegram_notify_entity
     data:
       message: 'ЕКБ: Хозяин пришёл, уведомления об открытии двери отключены'
   - service: input_boolean.turn_off
@@ -352,7 +373,9 @@
     entity_id: input_boolean.notify_door
     state: 'on'
   action:
-  - service: notify.me
+  - service: notify.send_message
+    target:
+      entity_id: !secret telegram_notify_entity
     data:
       message: 'ЕКБ: Открытие двери'
 - id: water_leak_bathroom
@@ -363,7 +386,9 @@
     to: 'on'
     trigger: state
   action:
-  - service: notify.me
+  - service: notify.send_message
+    target:
+      entity_id: !secret telegram_notify_entity
     data:
       message: 'ЕКБ: Протечка воды в ванной, перекрываем подачу воды'
   - service: switch.turn_off
@@ -384,7 +409,9 @@
     to: 'on'
     trigger: state
   action:
-  - service: notify.me
+  - service: notify.send_message
+    target:
+      entity_id: !secret telegram_notify_entity
     data:
       message: 'ЕКБ: Протечка воды в кухне, перекрываем подачу воды'
   - service: switch.turn_on
@@ -405,7 +432,9 @@
     to: 'on'
     trigger: state
   action:
-  - service: notify.me
+  - service: notify.send_message
+    target:
+      entity_id: !secret telegram_notify_entity
     data:
       message: !secret security_battery_leak_message
   - service: media_player.play_media
@@ -424,7 +453,9 @@
     to: 'on'
     trigger: state
   action:
-  - service: notify.me
+  - service: notify.send_message
+    target:
+      entity_id: !secret telegram_notify_entity
     data:
       message: !secret security_battery_leak_message
   - service: media_player.play_media
@@ -466,4 +497,170 @@
     target:
       entity_id:
       - switch.door_light_plug
+
+# Личные сообщения на шлюз BP1_base. Каналы сюда не входят: у них другой
+# entity_id. Свои исходящие отсекаются по длинному имени узла.
+# Получатель — личный чат с ботом, не групповой telegram_notify_entity.
+- id: meshtastic_dm_to_telegram
+  alias: "Meshtastic: личное сообщение в Telegram"
+  description: >-
+    Входящее личное сообщение на шлюз уходит в личный Telegram.
+    Сообщения каналов и собственные исходящие не пересылаются.
+    message_tag равен !id ноды: polling отдаёт у ответа только номер
+    сообщения, адрес потом ищется в input_text.meshtastic_reply_routes.
+  mode: queued
+  max: 10
+  variables:
+    node: >-
+      {% set sender = trigger.event.data.from_name | default('', true) | string %}
+      {% set found = sender | regex_findall('![0-9a-fA-F]{8}') %}
+      {{ found[0] if found else '' }}
+  triggers:
+    - trigger: event
+      event_type: meshtastic_message_log
+      event_data:
+        entity_id: meshtastic.gateway_a1ex_dm
+  conditions:
+    - condition: template
+      value_template: >-
+        {% set sender = trigger.event.data.from_name | default('', true) %}
+        {% set own = states('sensor.meshtastic_a1ex_1770162712_node_long_name') %}
+        {{ sender | trim | length > 0
+           and not sender.startswith(own ~ ' (')
+           and (trigger.event.data.message | default('', true) | string | trim | length) > 0 }}
+  actions:
+    - action: telegram_bot.send_message
+      data:
+        entity_id: !secret telegram_personal_notify_entity
+        parse_mode: html
+        message_tag: "{{ node }}"
+        message: >-
+          {% set sender = trigger.event.data.from_name | default('', true) | string %}
+          {% set who = sender | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') %}
+          {% set body = trigger.event.data.message | string
+             | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') %}
+          {{ 'ЕКБ: Мештастик, личное\n'
+             ~ ('node:' ~ node ~ '\n' if node else '')
+             ~ 'от: ' ~ who ~ '\n'
+             ~ body }}
+
+# Ответ в Telegram на уведомление выше. Цитата должна содержать строку node:!id.
+# Чат берётся из уже загруженного секрета личного notify, новый секрет не нужен.
+- id: meshtastic_telegram_reply
+  alias: "Meshtastic: ответ из Telegram в сеть"
+  description: >-
+    Ответ в личном чате на уведомление со строкой node:!id уходит
+    личным сообщением с шлюза BP1_base. Длиннее лимита прошивки не шлётся.
+  mode: queued
+  max: 3
+  variables:
+    personal_notify: !secret telegram_personal_notify_entity
+    quoted: >-
+      {% set d = trigger.event.data %}
+      {% set reply = d.reply_to_message if d.reply_to_message is defined else none %}
+      {% if reply is none and d.message is mapping and d.message.reply_to_message is defined %}
+        {% set reply = d.message.reply_to_message %}
+      {% endif %}
+      {% if reply is mapping %}
+        {{ reply.text | default(reply.caption, true) | default('', true) }}
+      {% elif reply is string %}
+        {{ reply }}
+      {% endif %}
+    node: >-
+      {% set rid = trigger.event.data.reply_to_message_id | default('', true) | string %}
+      {% set ns = namespace(node='') %}
+      {% for item in states('input_text.meshtastic_reply_routes').split(',') %}
+        {% set parts = item.split(':', 1) %}
+        {% if parts | length > 1 and parts[0] == rid %}
+          {% set ns.node = parts[1] %}
+        {% endif %}
+      {% endfor %}
+      {% if ns.node %}
+        {{ ns.node }}
+      {% else %}
+        {% set found = quoted | regex_findall('node:![0-9a-fA-F]{8}') %}
+        {{ found[0][5:] if found else '' }}
+      {% endif %}
+    body: >-
+      {% set d = trigger.event.data %}
+      {% if d.text is string %}
+        {{ d.text | trim }}
+      {% elif d.message is string %}
+        {{ d.message | trim }}
+      {% elif d.message is mapping %}
+        {{ d.message.text | default('', true) | trim }}
+      {% endif %}
+  triggers:
+    - trigger: event
+      event_type: telegram_text
+  conditions:
+    - condition: template
+      value_template: >-
+        {{ trigger.event.data.chat_id | string == personal_notify.split('_')[-1] }}
+  actions:
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >-
+                {% set n = body | length %}
+                {% set ascii = body | regex_search('[^\x00-\x7F]') is none %}
+                {{ node | length == 9 and node[0] == '!'
+                   and n > 0 and ((ascii and n <= 200) or (not ascii and n <= 100)) }}
+          sequence:
+            - action: meshtastic.send_text
+              continue_on_error: true
+              response_variable: mesh_send
+              data:
+                to: "{{ node }}"
+                text: "{{ body }}"
+                ack: true
+            # Подтверждение — реакция на самом ответе, без отдельного сообщения в чат.
+            # Палец вниз только если сервис радио упал с ошибкой.
+            - action: telegram_bot.set_message_reaction
+              continue_on_error: true
+              data:
+                entity_id: !secret telegram_personal_notify_entity
+                chat_id: "{{ personal_notify.split('_')[-1] | int }}"
+                message_id: "{{ trigger.event.data.id }}"
+                reaction: >-
+                  {{ '👍' if mesh_send is mapping and mesh_send.sent is defined else '👎' }}
+        - conditions:
+            - condition: template
+              value_template: "{{ trigger.event.data.reply_to_message_id is defined }}"
+          sequence:
+            - action: notify.send_message
+              target:
+                entity_id: !secret telegram_personal_notify_entity
+              data:
+                message: >-
+                  Мештастик: не нашёл ноду для этого ответа или текст длиннее лимита.
+                  Ответьте на новое уведомление. До 100 русских букв или 200 латинских.
+
+# Запоминает, какому message_id Telegram соответствует !id ноды.
+- id: meshtastic_telegram_route
+  alias: "Meshtastic: запомнить маршрут ответа"
+  description: >-
+    telegram_sent с message_tag вида !id дописывает пару в
+    input_text.meshtastic_reply_routes. Хранятся последние 10.
+  mode: queued
+  max: 10
+  triggers:
+    - trigger: event
+      event_type: telegram_sent
+  conditions:
+    - condition: template
+      value_template: >-
+        {{ trigger.event.data.message_tag is match('^![0-9a-fA-F]{8}$')
+           and trigger.event.data.message_id is number }}
+  actions:
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.meshtastic_reply_routes
+      data:
+        value: >-
+          {% set cur = states('input_text.meshtastic_reply_routes') | default('', true) %}
+          {% set pair = trigger.event.data.message_id ~ ':' ~ trigger.event.data.message_tag %}
+          {% set items = cur.split(',') | reject('equalto', '') | reject('equalto', 'unknown') | reject('equalto', 'unavailable') | list %}
+          {% set items = (items + [pair])[-10:] %}
+          {{ items | join(',') }}
 

@@ -18,6 +18,7 @@ secrets.yaml
 # Allow documentation
 # ==================================================
 !README.md
+!AGENTS.md
 
 # ==================================================
 # Keep gitignore itself

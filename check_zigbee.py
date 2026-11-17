@@ -17,11 +17,30 @@
 Требование к Zigbee2MQTT (configuration.yaml):
   advanced:
     last_seen: ISO_8601
+
+Возраст устройства — более свежая из двух меток: lastSeen в database.db
+(её пишет zigbee-herdsman) и last_seen в state.json. На этой установке state.json
+сохраняет старый last_seen, хотя MQTT уже публикует новый; без database.db
+короткий порог даёт ложный общий сбой.
+
+Пороги:
+  * state.json старше STATE_MAX_AGE — процесс Z2M не сбрасывает кэш (интервал записи 5 мин);
+  * питание mains (розетки и реле) — PROBE_MAX_AGE;
+    если молчат все такие устройства сразу, это сеть/координатор, а не одна розетка;
+  * в кэше есть water_leak — LEAK_MAX_AGE;
+  * остальные — DEFAULT_MAX_AGE_H.
+    Сузить точечно — MAX_AGE_OVERRIDES_H после `check_zigbee.py --ages`.
+
+Гистерезиса нет: новое сообщение сбрасывает возраст почти в ноль, а повторные
+опросы и так не шлют Telegram, пока не изменился problem_key.
+Availability Zigbee2MQTT (ping роутеров) сюда не подмешан: он меняет available
+у сущностей HA, а не только эту проверку.
 """
 import html
 import json
 import math
 import os
+import sqlite3
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -32,28 +51,39 @@ import yaml
 Z2M_DIR = os.environ.get("Z2M_DIR", "/config/zigbee2mqtt")
 CONFIG_FILE = os.path.join(Z2M_DIR, "configuration.yaml")
 STATE_FILE = os.path.join(Z2M_DIR, "state.json")
+DB_FILE = os.path.join(Z2M_DIR, "database.db")
 
-# Z2M сбрасывает state.json на диск примерно раз в 10 минут (проверьте по mtime).
-STATE_MAX_AGE = timedelta(hours=1)
+# Z2M пишет state.json каждые 5 минут, даже если кэш не менялся.
+STATE_MAX_AGE = timedelta(minutes=30)
 
 # Порог молчания устройства по умолчанию, часы.
 DEFAULT_MAX_AGE_H = 24
 
+# Питание от сети: розетки и реле. 2 часа — зазор над их реальным интервалом
+# (на этой сети это минуты), без ложной тревоги на батарейной кнопке.
+PROBE_MAX_AGE = timedelta(hours=2)
+PROBE_KEYS = {"power", "energy", "current"}
+# Датчики протечки на этой сети выходят на связь реже чем за 40 минут.
+LEAK_MAX_AGE = timedelta(hours=3)
+LEAK_KEYS = {"water_leak"}
+# Столько контрольных розеток нужно, чтобы молчание всех сразу считать сетью.
+NETWORK_MIN_PROBES = 2
+
 # Индивидуальные пороги (часы) по friendly_name или ieee. Пример:
-#   "bath_leak_sensor": 12,
-# Подбирайте по `--ages`: порог должен быть заметно больше обычного интервала
-# между сообщениями устройства, иначе будут ложные тревоги.
+#   "bath_leak_sensor": 6,
+# Ноль допустим. Подбирайте по `--ages`: порог заметно больше обычного интервала.
 MAX_AGE_OVERRIDES_H = {
 }
 
 # Не проверять (friendly_name или ieee): снятые с эксплуатации, лежащие в ящике и т.п.
 IGNORE = set()
 
-# «Массовый сбой»: молчат >= max(MASS_MIN, MASS_SHARE * всего) устройств сразу.
+# «Массовый сбой» по числу молчащих, если контрольных розеток меньше двух.
 MASS_MIN = 3
 MASS_SHARE = 0.5
 
 MAX_REPORT_LINES = 30  # лимит Telegram — 4096 символов
+DEVICE_TYPES = {"Coordinator", "Router", "EndDevice", "Unknown", "GreenPower"}
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -107,6 +137,99 @@ def load_devices():
     }
 
 
+def power_kind(value):
+    """mains | battery | unknown. «Mains (w/ battery backup)» остаётся mains."""
+    if isinstance(value, bool) or value is None:
+        return "unknown"
+    if isinstance(value, (int, float)):
+        primary = int(value) & 0x7F
+        if primary in (1, 2, 4, 5, 6):
+            return "mains"
+        if primary == 3:
+            return "battery"
+        return "unknown"
+    if not isinstance(value, str):
+        return "unknown"
+    text = value.lower().split("(w/")[0]
+    if "battery" in text and "mains" not in text and "dc source" not in text:
+        return "battery"
+    if "mains" in text or "dc source" in text or "emergency mains" in text:
+        return "mains"
+    return "unknown"
+
+
+def _remember_meta(found, entry):
+    if not isinstance(entry, dict) or entry.get("type") not in DEVICE_TYPES:
+        return
+    ieee = entry.get("ieeeAddr") or entry.get("ieee")
+    if not ieee:
+        return
+    found[norm_ieee(ieee)] = {
+        "type": entry.get("type") or "Unknown",
+        "kind": power_kind(entry.get("powerSource")),
+        "last_seen": entry.get("lastSeen"),
+    }
+
+
+def load_radio_meta():
+    """ieee → {type, kind} из database.db. Пустой словарь, если файла нет или он битый.
+
+    Формат Zigbee2MQTT 2.x — NDJSON (не sqlite). Старый sqlite читается отдельно.
+    Классификация необязательна: без неё порог остаётся суточным.
+    """
+    try:
+        with open(DB_FILE, "rb") as f:
+            magic = f.read(15)
+    except OSError:
+        return {}
+    try:
+        if magic.startswith(b"SQLite format"):
+            return _meta_sqlite()
+        return _meta_ndjson()
+    except (OSError, sqlite3.Error, UnicodeError):
+        return {}
+
+
+def _meta_ndjson():
+    found = {}
+    with open(DB_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                _remember_meta(found, json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return found
+
+
+def _meta_sqlite():
+    found = {}
+    uri = "file:" + DB_FILE.replace("\\", "/") + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=2)
+    try:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "devices" not in tables:
+            return {}
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(devices)")}
+        if "ieeeAddr" not in cols:
+            return {}
+        type_col = "type" if "type" in cols else None
+        power_col = "powerSource" if "powerSource" in cols else None
+        wanted = ["ieeeAddr"] + [c for c in (type_col, power_col) if c]
+        for row in conn.execute(f"SELECT {', '.join(wanted)} FROM devices"):
+            rec = dict(zip(wanted, row))
+            _remember_meta(found, {
+                "type": rec.get("type") or "Unknown",
+                "ieeeAddr": rec.get("ieeeAddr"),
+                "powerSource": rec.get("powerSource"),
+            })
+    finally:
+        conn.close()
+    return found
+
+
 def read_state():
     """Читает state.json; Z2M пишет файл не атомарно — при битом JSON повторяем."""
     last_err = None
@@ -123,21 +246,82 @@ def read_state():
     raise last_err
 
 
+def index_state(state):
+    """Ключи state.json бывают в разном регистре; группы (маленькие int) пропускаем."""
+    indexed = {}
+    for key, value in state.items():
+        if isinstance(key, str) and key.lower().startswith("0x"):
+            indexed[norm_ieee(key)] = value
+        elif isinstance(key, int) and key > 0xFFFF:
+            indexed[norm_ieee(key)] = value
+    return indexed
+
+
 def parse_ts(value):
-    """ISO_8601 / ISO_8601_local / epoch (мс) → aware datetime (UTC)."""
+    """ISO_8601 / ISO_8601_local / epoch (мс) → aware datetime (UTC).
+
+    Метка без пояса — локальное время контейнера. ISO_8601_local у Z2M именно такое;
+    считать его UTC в Екатеринбурге значит прятать отказ лишние 5 часов.
+    """
     if isinstance(value, bool):
         raise ValueError(value)
     if isinstance(value, (int, float)):
         return datetime.fromtimestamp(value / 1000 if value > 1e11 else value, timezone.utc)
     if isinstance(value, str):
         dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        return dt.astimezone(timezone.utc)
     raise ValueError(value)
 
 
-def limit_for(ieee, name):
-    hours = MAX_AGE_OVERRIDES_H.get(name) or MAX_AGE_OVERRIDES_H.get(ieee) or DEFAULT_MAX_AGE_H
+def is_probe(meta, entry):
+    """Сетевое устройство. Батарея не пингуется этим порогом.
+
+    `voltage` не смотрим: у батарейных датчиков это милливольты батареи.
+    Реле без power/energy/current всё равно сетевое, если database.db говорит mains.
+    """
+    if meta.get("kind") == "battery":
+        return False
+    if meta.get("kind") == "mains":
+        return True
+    if meta.get("type") == "EndDevice":
+        return False
+    if not isinstance(entry, dict):
+        return False
+    return bool(PROBE_KEYS & entry.keys())
+
+
+def limit_for(ieee, name, probe, entry):
+    if name in MAX_AGE_OVERRIDES_H:
+        hours = MAX_AGE_OVERRIDES_H[name]
+    elif ieee in MAX_AGE_OVERRIDES_H:
+        hours = MAX_AGE_OVERRIDES_H[ieee]
+    elif probe:
+        return PROBE_MAX_AGE
+    elif isinstance(entry, dict) and (LEAK_KEYS & entry.keys()):
+        return LEAK_MAX_AGE
+    else:
+        hours = DEFAULT_MAX_AGE_H
     return timedelta(hours=hours)
+
+
+def freshest(state_raw, db_raw):
+    """Самая новая читаемая метка. Битые значения не затирают живую вторую метку."""
+    good = []
+    bad = []
+    for raw in (state_raw, db_raw):
+        if raw is None:
+            continue
+        try:
+            good.append((parse_ts(raw), raw))
+        except (ValueError, TypeError, OverflowError, OSError):
+            bad.append(raw)
+    if good:
+        return max(good, key=lambda item: item[0])
+    if bad:
+        return None, bad[0]
+    return None, None
 
 
 def fmt_age(td):
@@ -149,11 +333,21 @@ def fmt_age(td):
     return f"{int(td.total_seconds() // 60)} мин"
 
 
+def fmt_limit(td):
+    hours = td.total_seconds() / 3600
+    if hours < 1:
+        return f"{int(round(hours * 60))} мин"
+    if hours < 48:
+        text = f"{hours:g}"
+        return f"{text} ч"
+    return f"{hours / 24:g} сут"
+
+
 def esc(text):
     return html.escape(str(text), quote=False)
 
 
-def build_report(status, *, problems=(), checked=0, state_age=None, message="", mass=False):
+def build_report(status, *, problems=(), checked=0, state_age=None, message="", mass=False, network=False):
     """Готовый HTML для Telegram (parse_mode: html)."""
     if status == "ok":
         return f"✅ <b>Zigbee: все устройства на связи</b> ({checked})"
@@ -166,13 +360,18 @@ def build_report(status, *, problems=(), checked=0, state_age=None, message="", 
         return f"🚨 <b>Проверка Zigbee не отработала</b>\n<code>{esc(message)}</code>"
 
     lines = [f"⚠️ <b>Zigbee: нет связи с устройствами ({len(problems)} из {checked})</b>"]
-    if mass:
+    if network:
+        lines.append(
+            "Контрольные розетки молчат все сразу: похоже на координатор, радио или питание, "
+            "а не на одну розетку."
+        )
+    elif mass:
         lines.append("Похоже на общий сбой (Z2M / координатор / питание), а не на отдельные устройства.")
     for p in problems[:MAX_REPORT_LINES]:
         name = esc(p["name"])
         if p["reason"] == "silent":
             age = fmt_age(timedelta(seconds=p["age_seconds"]))
-            lines.append(f"• <b>{name}</b> — {age} назад (порог {p['limit_hours']:g} ч)")
+            lines.append(f"• <b>{name}</b> — {age} назад (порог {fmt_limit(timedelta(hours=p['limit_hours']))})")
         elif p["reason"] == "no_data":
             lines.append(f"• <b>{name}</b> — нет last_seen в state.json")
         else:
@@ -182,8 +381,8 @@ def build_report(status, *, problems=(), checked=0, state_age=None, message="", 
     return "\n".join(lines)
 
 
-def make_result(status, now, *, state_age=None, checked=0, problems=(), message="", mass=False):
-    problems = sorted(problems, key=lambda p: p["name"])
+def make_result(status, now, *, state_age=None, checked=0, problems=(), message="", mass=False, network=False):
+    problems = sorted(problems, key=lambda p: (not p.get("probe"), p["name"]))
     if status == "offline":
         key = "offline:" + ",".join(sorted(p["ieee"] for p in problems))
     elif status == "error":
@@ -202,7 +401,7 @@ def make_result(status, now, *, state_age=None, checked=0, problems=(), message=
         "problem_key": key,
         "report": build_report(
             status, problems=problems, checked=checked,
-            state_age=state_age, message=message, mass=mass,
+            state_age=state_age, message=message, mass=mass, network=network,
         ),
         "checked_at": now.isoformat(),
     }
@@ -217,26 +416,35 @@ def evaluate(now):
     if not devices:
         raise RuntimeError("в configuration.yaml не найдено ни одного устройства")
 
-    state = read_state()
+    state = index_state(read_state())
+    meta = load_radio_meta()
     problems, rows, has_last_seen = [], [], False
     for ieee, name in devices.items():
         entry = state.get(ieee)
-        raw = entry.get("last_seen") if isinstance(entry, dict) else None
-        limit = limit_for(ieee, name)
-        base = {"name": name, "ieee": ieee, "limit_hours": limit.total_seconds() / 3600}
+        info = meta.get(ieee, {})
+        state_raw = entry.get("last_seen") if isinstance(entry, dict) else None
+        seen_at, raw = freshest(state_raw, info.get("last_seen"))
+        probe = is_probe(info, entry if isinstance(entry, dict) else None)
+        limit = limit_for(ieee, name, probe, entry if isinstance(entry, dict) else None)
+        base = {
+            "name": name,
+            "ieee": ieee,
+            "limit_hours": limit.total_seconds() / 3600,
+            "probe": probe,
+            "kind": info.get("kind") or "unknown",
+        }
 
-        if raw is None:
+        if seen_at is None and raw is None:
             problems.append({**base, "reason": "no_data", "last_seen": None, "age_seconds": None})
             rows.append((None, base))
             continue
-        try:
-            age = now - parse_ts(raw)
-        except (ValueError, TypeError, OverflowError, OSError):
+        if seen_at is None:
             problems.append({**base, "reason": "bad_timestamp", "last_seen": str(raw), "age_seconds": None})
             rows.append((None, base))
             continue
 
         has_last_seen = True
+        age = now - seen_at
         rows.append((age, base))
         if age > limit:
             problems.append({**base, "reason": "silent", "last_seen": str(raw),
@@ -250,6 +458,20 @@ def evaluate(now):
     return state_age, devices, problems, rows
 
 
+def network_down(rows):
+    """Все контрольные розетки молчат дольше своего порога. Одной мало: это ещё не сеть.
+
+    Порог берётся из записи устройства, чтобы MAX_AGE_OVERRIDES_H мог его поднять.
+    """
+    probes = [(age, base) for age, base in rows if base.get("probe")]
+    if len(probes) < NETWORK_MIN_PROBES:
+        return False
+    return all(
+        age is None or age > timedelta(hours=base["limit_hours"])
+        for age, base in probes
+    )
+
+
 def run(now):
     try:
         state_age = now - datetime.fromtimestamp(os.path.getmtime(STATE_FILE), timezone.utc)
@@ -258,23 +480,38 @@ def run(now):
     if state_age > STATE_MAX_AGE:
         return make_result("stale", now, state_age=state_age)
 
-    state_age, devices, problems, _ = evaluate(now)
+    state_age, devices, problems, rows = evaluate(now)
+    network = network_down(rows)
     if not problems:
         return make_result("ok", now, state_age=state_age, checked=len(devices))
 
     silent = sum(1 for p in problems if p["reason"] == "silent")
-    mass = silent >= max(MASS_MIN, math.ceil(MASS_SHARE * len(devices)))
-    return make_result("offline", now, state_age=state_age, checked=len(devices),
-                       problems=problems, mass=mass)
+    mass = network or silent >= max(MASS_MIN, math.ceil(MASS_SHARE * len(devices)))
+    return make_result(
+        "offline", now, state_age=state_age, checked=len(devices),
+        problems=problems, mass=mass, network=network,
+    )
+
+
+def emit(text):
+    """UTF-8 в stdout. Локаль cp1251/ascii не должна ронять сенсор на эмодзи отчёта."""
+    data = text.encode("utf-8")
+    if not data.endswith(b"\n"):
+        data += b"\n"
+    sys.stdout.buffer.write(data)
+    sys.stdout.buffer.flush()
 
 
 def print_ages(now):
-    _, _, _, rows = evaluate(now)
+    state_age, _, _, rows = evaluate(now)
     rows.sort(key=lambda r: (r[0] is None, -(r[0].total_seconds() if r[0] else 0)))
-    print(f"{'возраст':>10}  {'порог':>6}  устройство")
+    lines = [f"state.json: {fmt_age(state_age)}", f"{'возраст':>10}  {'порог':>8}  {'роль':<10}  устройство"]
     for age, base in rows:
         age_s = fmt_age(age) if age is not None else "нет данных"
-        print(f"{age_s:>10}  {base['limit_hours']:>5g}ч  {base['name']}  ({base['ieee']})")
+        role = "розетка" if base.get("probe") else base.get("kind") or "unknown"
+        limit = fmt_limit(timedelta(hours=base["limit_hours"]))
+        lines.append(f"{age_s:>10}  {limit:>8}  {role:<10}  {base['name']}  ({base['ieee']})")
+    emit("\n".join(lines))
 
 
 def main():
@@ -286,7 +523,7 @@ def main():
         result = run(now)
     except Exception as e:  # noqa: BLE001 — контракт: всегда валидный JSON
         result = make_result("error", now, message=f"{type(e).__name__}: {e}")
-    print(json.dumps(result, ensure_ascii=False))
+    emit(json.dumps(result, ensure_ascii=False))
 
 
 if __name__ == "__main__":
